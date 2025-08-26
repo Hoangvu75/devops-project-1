@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     git \
     sshpass \
     openssh-client \
+    rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Cài Ansible qua pip để chủ động version

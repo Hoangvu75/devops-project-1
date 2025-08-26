@@ -7,21 +7,26 @@
       - curl
       - gnupg
       - lsb-release
-    project_dir: "{{ project_dir | default('/opt/devops-project-1') }}"
+    project_dir: "/opt/devops-project-1"
 
   pre_tasks:
-    - name: Ensure apt cache is up to date (Debian/Ubuntu)
+    - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
       when: ansible_os_family == 'Debian'
 
   tasks:
-    - name: Install prerequisites (Debian/Ubuntu)
+    - name: Install base packages (Debian)
       ansible.builtin.apt:
-        name: "{{ docker_packages_debian }}"
+        name: "{{ docker_packages_debian + ['rsync','python3-requests'] }}"
         state: present
       when: ansible_os_family == 'Debian'
+
+    - name: Set apt arch for Docker repo
+      ansible.builtin.set_fact:
+        apt_arch: >-
+          {{ 'amd64' if ansible_architecture in ['x86_64'] else 'arm64' if ansible_architecture in ['aarch64','arm64'] else ansible_architecture }}
 
     - name: Add Docker GPG key
       ansible.builtin.shell: |
@@ -32,55 +37,95 @@
         creates: /etc/apt/keyrings/docker.gpg
       when: ansible_os_family == 'Debian'
 
-    - name: Add Docker repository
+    - name: Add Docker apt repo
       ansible.builtin.copy:
         dest: /etc/apt/sources.list.d/docker.list
         content: |
-          deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable
+          deb [arch={{ apt_arch }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable
       when: ansible_os_family == 'Debian'
 
-    - name: Install Docker Engine and Compose plugin
-      ansible.builtin.apt:
-        update_cache: true
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-          - docker-buildx-plugin
-          - docker-compose-plugin
-        state: present
-      when: ansible_os_family == 'Debian'
+    - name: Install Docker CE (fallback docker.io)
+      block:
+        - name: Install Docker CE + Compose plugin
+          ansible.builtin.apt:
+            update_cache: true
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+              - docker-buildx-plugin
+              - docker-compose-plugin
+            state: present
+          when: ansible_os_family == 'Debian'
+      rescue:
+        - name: Install docker.io (fallback)
+          ansible.builtin.apt:
+            update_cache: true
+            name:
+              - docker.io
+              - docker-compose
+            state: present
+          when: ansible_os_family == 'Debian'
 
-    - name: Ensure project directory exists
+    - name: Start docker service if available
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+      register: docker_service_result
+      failed_when: false
+
+    - name: Check docker socket
+      ansible.builtin.stat:
+        path: /var/run/docker.sock
+      register: docker_sock
+
+    - name: Start dockerd (no systemd)
+      ansible.builtin.shell: |
+        nohup dockerd --host=unix:///var/run/docker.sock >/var/log/dockerd.log 2>&1 &
+      args:
+        creates: /var/run/docker.sock
+      when: not docker_sock.stat.exists
+
+    - name: Wait for docker socket
+      ansible.builtin.wait_for:
+        path: /var/run/docker.sock
+        timeout: 40
+
+    - name: Ensure project dir
       ansible.builtin.file:
         path: "{{ project_dir }}"
         state: directory
         mode: '0755'
 
-    - name: Copy repository to target (excluding .git)
-      ansible.builtin.copy:
+    - name: Sync repository (rsync, exclude heavy dirs)
+      ansible.posix.synchronize:
         src: "{{ playbook_dir }}/.."
         dest: "{{ project_dir }}/"
-        mode: '0644'
-      vars:
-        ansible_copy_files: true
+        archive: yes
+        delete: no
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=**/node_modules"
+          - "--exclude=**/.next"
+          - "--exclude=**/dist"
 
-    - name: Compose up selected services
+    - name: Compose up services
       community.docker.docker_compose_v2:
         project_src: "{{ project_dir }}"
         files:
           - docker-compose.yml
         services: "{{ compose_services | default([]) }}"
-        pull: true
-        build: true
+        pull: always
+        build: always
         state: present
 
-    - name: Show running containers
-      community.docker.docker_container_info:
-        gather_networks: false
+    - name: Docker host info (containers)
+      community.docker.docker_host_info:
+        containers: true
       register: docker_info
 
     - name: Print container names
       ansible.builtin.debug:
-        msg: "{{ item.Name }}"
+        msg: "{{ (item.Names | default([]))[0] | default(item.Name | default('unknown')) }}"
       loop: "{{ docker_info.containers | default([]) }}" 

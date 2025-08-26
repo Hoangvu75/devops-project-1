@@ -2,7 +2,7 @@ version: "3.9"
 services:
   control-node:
     build: ./control-node
-    image: ubuntu-server-control-node   # image cho control-node
+    image: ubuntu-server-control-node
     container_name: control-node
     networks:
       - ansible-net
@@ -10,14 +10,53 @@ services:
     volumes:
       - ..:/workspace:rw
 
-  ubuntu-server:
+  ubuntu-server-1:
     build: ./ubuntu-server
-    image: ubuntu-server:latest         # chỉ build 1 image tên "ubuntu-server"
+    container_name: ubuntu-server-1
     networks:
       - ansible-net
     tty: true
-    deploy:
-      replicas: 3                       # tạo 3 container từ cùng 1 image
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - docker-data-1:/var/lib/docker
+    ports:
+      - "2221:22"   # SSH
+      - "13000:3000"  # FE inside server-1
+      - "14000:4000"  # BE inside server-1
+      - "19090:9090"  # Prometheus
+      - "13001:3001"  # Grafana
+
+  ubuntu-server-2:
+    build: ./ubuntu-server
+    container_name: ubuntu-server-2
+    networks:
+      - ansible-net
+    tty: true
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - docker-data-2:/var/lib/docker
+    ports:
+      - "2222:22"   # SSH
+
+  ubuntu-server-3:
+    build: ./ubuntu-server
+    container_name: ubuntu-server-3
+    networks:
+      - ansible-net
+    tty: true
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - docker-data-3:/var/lib/docker
+    ports:
+      - "2223:22"   # SSH
+
+volumes:
+  docker-data-1:
+  docker-data-2:
+  docker-data-3:
 
 networks:
   ansible-net:

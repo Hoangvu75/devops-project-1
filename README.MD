@@ -1,440 +1,156 @@
-### TodoList DevOps Project
+# DevOps Project 1
 
-A learning-oriented, production-like TodoList application showcasing a modern DevOps toolchain.
-
-- **Frontend**: Next.js (React)
-- **Backend**: NestJS (Node.js)
-- **CI/CD**: Jenkins
-- **Orchestration**: Kubernetes
-- **Ingress / Web**: NGINX (Ingress Controller)
-- **Code Quality**: SonarQube
-- **Provisioning**: Ansible
-- **Observability (Logs)**: Loki + Grafana (with Promtail)
+A small full‑stack demo with:
+- Backend: NestJS (HTTP API, SQLite via TypeORM, Prometheus metrics on `/metrics`)
+- Frontend: Next.js (Todo UI)
+- Monitoring: Prometheus + Grafana
+- Orchestration: Docker Compose
+- Provisioning/Deploy: Ansible (run from a control node into simulated Ubuntu servers)
 
 ---
 
-### Goals
-- **Build** and containerize a Next.js frontend and NestJS backend
-- **Automate** CI/CD with Jenkins Pipelines (PR checks → build → test → security scan → deploy)
-- **Deploy** to Kubernetes with zero-downtime strategies (RollingUpdate)
-- **Expose** services via NGINX Ingress
-- **Enforce** quality gates with SonarQube
-- **Centralize logs** with Loki and visualize in Grafana
-- **Automate infra** bootstrap with Ansible
+## Architecture
+
+There are two main ways to run the stack:
+
+1) Local Compose (single host)
+- Top‑level `docker-compose.yml` builds and runs `backend`, `frontend`, `prometheus`, `grafana` together.
+- Prometheus scrapes the backend at `/metrics`.
+
+2) Lab with "Ubuntu servers" (Docker‑in‑Docker)
+- Folder `ubuntu-server/` provides:
+  - `control-node`: a container with Ansible + collection preinstalled and the project mounted at `/workspace`.
+  - `ubuntu-server-1..3`: simulated Ubuntu servers (privileged) able to run Docker daemon inside each container.
+- Ansible playbook (`ansible/deploy.yml`) installs Docker on target(s), syncs the repo to `/opt/devops-project-1`, and runs `docker compose` only for the services defined for that host/group.
+
+Monitoring
+- Backend exposes metrics at `GET /metrics` via `prom-client` and a Nest interceptor.
+- Prometheus scrapes the backend job and Grafana renders dashboards provisioned in `grafana/provisioning/`.
 
 ---
 
-### High-Level Architecture
-- `nextjs-frontend` → served via Node server or static export behind **NGINX Ingress**
-- `nestjs-backend` → API service exposed internally via ClusterIP, publicly via **Ingress** paths
-- **Jenkins** → builds, tests, scans, and deploys using Kubernetes credentials
-- **Loki + Promtail + Grafana** → cluster logs aggregated and visualized
-- **SonarQube** → quality scanning (TypeScript rules for Next/Nest)
+## Quick start (local)
 
-```
-[Developers] → Git push → Jenkins (CI/CD) → Docker Registry → Kubernetes
-                                            ↘ SonarQube (Quality Gate)
-Kubernetes → NGINX Ingress → Frontend (Next.js) ⇄ Backend (NestJS)
-Kubernetes logs → Promtail → Loki → Grafana Dashboards
-```
-
----
-
-### Repository Structure (suggested)
-```
-.
-├─ frontend/              # Next.js app
-├─ backend/               # NestJS app
-├─ cicd/
-│  ├─ Jenkinsfile         # Declarative pipeline
-│  └─ sonar-project.properties
-├─ deploy/
-│  ├─ k8s/
-│  │  ├─ namespace.yaml
-│  │  ├─ ingress.yaml
-│  │  ├─ frontend/
-│  │  │  ├─ deployment.yaml
-│  │  │  └─ service.yaml
-│  │  └─ backend/
-│  │     ├─ deployment.yaml
-│  │     └─ service.yaml
-│  └─ monitoring/
-│     ├─ loki/
-│     ├─ promtail/
-│     └─ grafana/
-├─ ansible/
-│  ├─ inventories/
-│  ├─ roles/
-│  │  ├─ jenkins/
-│  │  ├─ k8s/
-│  │  ├─ nginx_ingress/
-│  │  └─ loki_stack/
-│  └─ playbooks/
-│     ├─ bootstrap-ci.yml
-│     ├─ bootstrap-k8s.yml
-│     └─ bootstrap-observability.yml
-└─ README.MD
-```
-
----
-
-### Local Development
-- Requirements:
-  - Node.js 18+
-  - Docker + Docker Compose
-
-- Frontend (Next.js):
 ```bash
-cd frontend
-npm install
-npm run dev
-```
-- Backend (NestJS):
-```bash
-cd backend
-npm install
-npm run start:dev
-```
-
-- Docker Compose (optional local stack):
-```bash
+# From project root
 docker compose up -d --build
 ```
 
----
+URLs (local):
+- Frontend: http://localhost:3000
+- Backend:  http://localhost:4000
+- Prometheus: http://localhost:9090
+- Grafana:   http://localhost:3001
 
-### Containerization
-- Example Dockerfiles:
-
-Frontend `frontend/Dockerfile` (multi-stage):
-```dockerfile
-# Stage 1: deps
-FROM node:18-alpine AS deps
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-
-# Stage 2: build
-FROM node:18-alpine AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-RUN npm run build
-
-# Stage 3: runner
-FROM node:18-alpine AS runner
-WORKDIR /app
-ENV NODE_ENV=production
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY package*.json ./
-RUN npm ci --omit=dev
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-Backend `backend/Dockerfile`:
-```dockerfile
-FROM node:18-alpine as deps
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-
-FROM node:18-alpine as builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-RUN npm run build
-
-FROM node:18-alpine as runner
-WORKDIR /app
-ENV NODE_ENV=production
-COPY --from=builder /app/dist ./dist
-COPY package*.json ./
-RUN npm ci --omit=dev
-EXPOSE 4000
-CMD ["node", "dist/main.js"]
-```
+Open Prometheus Targets: http://localhost:9090/targets → `backend` must be UP.
+Generate a few requests (CRUD in the frontend or `curl` the backend) then open Grafana to view dashboards.
 
 ---
 
-### Kubernetes Manifests (examples)
-Namespace `deploy/k8s/namespace.yaml`:
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: todolist
-```
+## Lab mode with simulated servers
 
-Backend `deploy/k8s/backend/deployment.yaml`:
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend
-  namespace: todolist
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: backend
-  template:
-    metadata:
-      labels:
-        app: backend
-    spec:
-      containers:
-        - name: backend
-          image: YOUR_REGISTRY/todolist-backend:latest
-          ports:
-            - containerPort: 4000
-          env:
-            - name: NODE_ENV
-              value: production
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 4000
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 4000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: backend
-  namespace: todolist
-spec:
-  type: ClusterIP
-  selector:
-    app: backend
-  ports:
-    - port: 4000
-      targetPort: 4000
-```
-
-Frontend `deploy/k8s/frontend/deployment.yaml`:
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: frontend
-  namespace: todolist
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: frontend
-  template:
-    metadata:
-      labels:
-        app: frontend
-    spec:
-      containers:
-        - name: frontend
-          image: YOUR_REGISTRY/todolist-frontend:latest
-          ports:
-            - containerPort: 3000
-          env:
-            - name: NODE_ENV
-              value: production
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: frontend
-  namespace: todolist
-spec:
-  type: ClusterIP
-  selector:
-    app: frontend
-  ports:
-    - port: 3000
-      targetPort: 3000
-```
-
-Ingress `deploy/k8s/ingress.yaml` (NGINX Ingress Controller required):
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: todolist-ingress
-  namespace: todolist
-  annotations:
-    kubernetes.io/ingress.class: nginx
-spec:
-  rules:
-    - host: todolist.local
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: frontend
-                port:
-                  number: 3000
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: backend
-                port:
-                  number: 4000
-```
-
----
-
-### Jenkins CI/CD
-- Declarative pipeline `cicd/Jenkinsfile` (example stages):
-```groovy
-pipeline {
-  agent any
-  environment {
-    REGISTRY = 'YOUR_REGISTRY'
-    IMAGE_FRONTEND = "${REGISTRY}/todolist-frontend"
-    IMAGE_BACKEND  = "${REGISTRY}/todolist-backend"
-  }
-  stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
-    stage('Node Setup') {
-      steps {
-        sh 'node -v || true'
-        sh 'npm -v || true'
-      }
-    }
-    stage('Install & Test') {
-      parallel {
-        stage('Frontend') {
-          steps { sh 'cd frontend && npm ci && npm test -- --ci' }
-        }
-        stage('Backend') {
-          steps { sh 'cd backend && npm ci && npm run test:ci' }
-        }
-      }
-    }
-    stage('SonarQube Scan') {
-      steps {
-        withSonarQubeEnv('SonarQube') {
-          sh 'sonar-scanner -Dproject.settings=cicd/sonar-project.properties'
-        }
-      }
-    }
-    stage('Build Images') {
-      parallel {
-        stage('Frontend Image') {
-          steps { sh 'docker build -t ${IMAGE_FRONTEND}:${BUILD_NUMBER} frontend' }
-        }
-        stage('Backend Image') {
-          steps { sh 'docker build -t ${IMAGE_BACKEND}:${BUILD_NUMBER} backend' }
-        }
-      }
-    }
-    stage('Push Images') {
-      steps {
-        sh 'docker push ${IMAGE_FRONTEND}:${BUILD_NUMBER}'
-        sh 'docker push ${IMAGE_BACKEND}:${BUILD_NUMBER}'
-      }
-    }
-    stage('Deploy to K8s') {
-      steps {
-        sh 'kubectl apply -f deploy/k8s/namespace.yaml'
-        sh 'kubectl -n todolist set image deployment/frontend frontend=${IMAGE_FRONTEND}:${BUILD_NUMBER} --record || kubectl -n todolist apply -f deploy/k8s/frontend'
-        sh 'kubectl -n todolist set image deployment/backend backend=${IMAGE_BACKEND}:${BUILD_NUMBER} --record || kubectl -n todolist apply -f deploy/k8s/backend'
-        sh 'kubectl apply -f deploy/k8s/ingress.yaml'
-      }
-    }
-  }
-  post {
-    always { archiveArtifacts artifacts: '**/junit*.xml', allowEmptyArchive: true }
-  }
-}
-```
-
-SonarQube config `cicd/sonar-project.properties` (example):
-```properties
-sonar.projectKey=todolist
-sonar.sources=frontend,backend
-sonar.language=ts
-sonar.sourceEncoding=UTF-8
-sonar.tests=frontend,backend
-sonar.javascript.lcov.reportPaths=frontend/coverage/lcov.info,backend/coverage/lcov.info
-```
-
----
-
-### Observability (Loki + Grafana)
-- Install via Helm (recommended):
+Start the lab:
 ```bash
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo update
-# Loki
-helm upgrade --install loki grafana/loki -n monitoring --create-namespace
-# Promtail (log collector)
-helm upgrade --install promtail grafana/promtail -n monitoring \
-  --set "config.clients[0].url=http://loki.monitoring:3100/loki/api/v1/push"
-# Grafana
-helm upgrade --install grafana grafana/grafana -n monitoring \
-  --set adminPassword=admin
+cd ubuntu-server
+docker compose up -d --build
 ```
-- Access Grafana and add Loki as a data source. Build dashboards for `nginx`, `frontend`, and `backend` pods.
+This creates:
+- `control-node` (Ansible controller; repo mounted at `/workspace`)
+- `ubuntu-server-1..3` (Docker daemon inside each; ports mapped to host)
 
----
-
-### Ansible (Bootstrap Examples)
-- CI server (Jenkins) provisioning `ansible/playbooks/bootstrap-ci.yml`:
-```yaml
-- hosts: jenkins
-  become: true
-  roles:
-    - jenkins
-```
-- Kubernetes cluster add-ons `ansible/playbooks/bootstrap-k8s.yml`:
-```yaml
-- hosts: k8s_masters
-  become: true
-  roles:
-    - nginx_ingress
-```
-- Observability stack `ansible/playbooks/bootstrap-observability.yml`:
-```yaml
-- hosts: k8s_masters
-  become: true
-  roles:
-    - loki_stack
-```
-
----
-
-### NGINX Ingress Notes
-- Use `NGINX Ingress Controller` via Helm:
+Enter control node:
 ```bash
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm repo update
-helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx -n ingress-nginx --create-namespace
+docker exec -it control-node bash
+cd /workspace/ansible
 ```
-- Map DNS (e.g., `/etc/hosts`) for `todolist.local` to your ingress controller address.
+
+Inventory (`ansible/hosts.ini`) — deploy all services to `ubuntu-server-1`:
+```ini
+[app]
+app1 ansible_host=ubuntu-server-1 ansible_user=root ansible_password=1234 ansible_python_interpreter=/usr/bin/python3
+```
+
+Group services (`ansible/group_vars/app.yml`):
+```yaml
+compose_services:
+  - backend
+  - frontend
+  - prometheus
+  - grafana
+project_dir: /opt/devops-project-1
+```
+
+Deploy:
+```bash
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i hosts.ini deploy.yml --become --limit app1
+```
+
+Published URLs (from host):
+- Frontend:   http://localhost:13000
+- Backend:    http://localhost:14000
+- Prometheus: http://localhost:19090
+- Grafana:    http://localhost:13001
+
+Regenerate traffic in the frontend, then check Prometheus Targets (should be UP) and Grafana dashboards.
 
 ---
 
-### Security & Quality
-- Enable SonarQube **quality gates** to fail the pipeline on low coverage or code smells.
-- Add basic dependency scans (e.g., `npm audit --production`) in CI.
-- Use Kubernetes Secrets for sensitive env vars and avoid committing them.
+## How deploy works (Ansible)
+
+`ansible/deploy.yml` does the following per host:
+1) Update apt cache and install base tools (`rsync`, `python3-requests`)
+2) Add Docker repo + install Docker CE (fallback to `docker.io` if needed)
+3) Start Docker service; if no systemd, start `dockerd` manually and wait for `/var/run/docker.sock`
+4) Sync the project to `project_dir` using rsync (excludes `.git`, `node_modules`, `.next`, `dist`)
+5) Run `docker compose` for the services configured in group vars
+6) Print running container names for quick verification
+
+Notes
+- The playbook is idempotent; re‑running updates the stack in place.
+- In the lab, services inside a compose call each other by service name (e.g., `backend:4000`), not `localhost`.
 
 ---
 
-### Next Steps
-- Fill in `YOUR_REGISTRY` and push images to Docker Hub/Harbor/GHCR
-- Add health endpoints in NestJS (`/health`) and Next.js (`/api/health` if needed)
-- Parameterize manifests with Helm/Kustomize for environments
-- Add TLS to Ingress with cert-manager
+## Troubleshooting
+
+- Prometheus target DOWN, error contains `localhost:4000`
+  - In a compose network, `localhost` refers to the Prometheus container itself. Ensure target is `backend:4000` (service name).
+- Grafana shows "No data"
+  - Generate traffic (CRUD on frontend or `curl http://localhost:14000/`) and wait 10–30s. Verify Prometheus `backend` target is UP.
+- Docker daemon errors in ubuntu‑server containers
+  - The playbook starts `dockerd` if systemd isn’t available; ensure the host was deployed via Ansible so dockerd is running.
+- apt lock errors (when deploying to multiple hosts)
+  - Use a single host or set `serial: 1` in the play to run hosts sequentially.
 
 ---
 
-### License
-This project is for educational purposes.
+## Repository layout (key files)
+
+```
+backend/                # NestJS API (exposes /metrics)
+frontend/               # Next.js UI
+prometheus.yml          # Prometheus scrape config
+ubuntu-server/          # Lab: control-node + ubuntu-server-1..3
+  control-node/
+  ubuntu-server/
+ansible/
+  hosts.ini             # Inventory
+  group_vars/app.yml    # Services per group
+  deploy.yml            # Playbook: install Docker, sync, compose up
+```
+
+---
+
+## Updating & redeploying
+
+After code changes:
+```bash
+# lab mode
+ansible-playbook -i ansible/hosts.ini ansible/deploy.yml --become --limit app1
+
+# local
+docker compose up -d --build
+```
+
+Enjoy hacking!
