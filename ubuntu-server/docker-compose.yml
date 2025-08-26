@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+  control-node:
+    build: ./control-node
+    image: ubuntu-server-control-node   # image cho control-node
+    container_name: control-node
+    networks:
+      - ansible-net
+    tty: true
+
+  ubuntu-server:
+    build: ./ubuntu-server
+    image: ubuntu-server:latest         # chỉ build 1 image tên "ubuntu-server"
+    networks:
+      - ansible-net
+    tty: true
+    deploy:
+      replicas: 3                       # tạo 3 container từ cùng 1 image
+
+networks:
+  ansible-net:
+    driver: bridge
