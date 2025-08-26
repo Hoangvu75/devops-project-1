@@ -1,0 +1,86 @@
+- name: Provision Docker and deploy devops-project-1
+  hosts: all
+  become: true
+  vars:
+    docker_packages_debian:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    project_dir: "{{ project_dir | default('/opt/devops-project-1') }}"
+
+  pre_tasks:
+    - name: Ensure apt cache is up to date (Debian/Ubuntu)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
+
+  tasks:
+    - name: Install prerequisites (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name: "{{ docker_packages_debian }}"
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Add Docker GPG key
+      ansible.builtin.shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+      when: ansible_os_family == 'Debian'
+
+    - name: Add Docker repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        content: |
+          deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Docker Engine and Compose plugin
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Ensure project directory exists
+      ansible.builtin.file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy repository to target (excluding .git)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/.."
+        dest: "{{ project_dir }}/"
+        mode: '0644'
+      vars:
+        ansible_copy_files: true
+
+    - name: Compose up selected services
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_dir }}"
+        files:
+          - docker-compose.yml
+        services: "{{ compose_services | default([]) }}"
+        pull: true
+        build: true
+        state: present
+
+    - name: Show running containers
+      community.docker.docker_container_info:
+        gather_networks: false
+      register: docker_info
+
+    - name: Print container names
+      ansible.builtin.debug:
+        msg: "{{ item.Name }}"
+      loop: "{{ docker_info.containers | default([]) }}" 

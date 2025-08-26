@@ -1,0 +1,5 @@
+compose_services:
+  - prometheus
+  - grafana
+
+project_dir: /opt/devops-project-1 
