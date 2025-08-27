@@ -1,11 +1,11 @@
 # Stage 1: Install dependencies
-FROM node:18-alpine AS deps
+FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
 # Stage 2: Build the application
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 # Accept the build argument for the API URL
 ARG NEXT_PUBLIC_API_URL
@@ -16,7 +16,7 @@ COPY . .
 RUN npm run build
 
 # Stage 3: Production runner
-FROM node:18-alpine AS runner
+FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/.next ./.next
