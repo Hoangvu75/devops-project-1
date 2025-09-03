@@ -96,52 +96,6 @@ Regenerate traffic in the frontend, then check Prometheus Targets (should be UP)
 
 ---
 
-## How deploy works (Ansible)
-
-`ansible/deploy.yml` does the following per host:
-1) Update apt cache and install base tools (`rsync`, `python3-requests`)
-2) Add Docker repo + install Docker CE (fallback to `docker.io` if needed)
-3) Start Docker service; if no systemd, start `dockerd` manually and wait for `/var/run/docker.sock`
-4) Sync the project to `project_dir` using rsync (excludes `.git`, `node_modules`, `.next`, `dist`)
-5) Run `docker compose` for the services configured in group vars
-6) Print running container names for quick verification
-
-Notes
-- The playbook is idempotent; re‑running updates the stack in place.
-- In the lab, services inside a compose call each other by service name (e.g., `backend:4000`), not `localhost`.
-
----
-
-## Troubleshooting
-
-- Prometheus target DOWN, error contains `localhost:4000`
-  - In a compose network, `localhost` refers to the Prometheus container itself. Ensure target is `backend:4000` (service name).
-- Grafana shows "No data"
-  - Generate traffic (CRUD on frontend or `curl http://localhost:14000/`) and wait 10–30s. Verify Prometheus `backend` target is UP.
-- Docker daemon errors in ubuntu‑server containers
-  - The playbook starts `dockerd` if systemd isn’t available; ensure the host was deployed via Ansible so dockerd is running.
-- apt lock errors (when deploying to multiple hosts)
-  - Use a single host or set `serial: 1` in the play to run hosts sequentially.
-
----
-
-## Repository layout (key files)
-
-```
-backend/                # NestJS API (exposes /metrics)
-frontend/               # Next.js UI
-prometheus.yml          # Prometheus scrape config
-ubuntu-server/          # Lab: control-node + ubuntu-server-1..3
-  control-node/
-  ubuntu-server/
-ansible/
-  hosts.ini             # Inventory
-  group_vars/app.yml    # Services per group
-  deploy.yml            # Playbook: install Docker, sync, compose up
-```
-
----
-
 ## Updating & redeploying
 
 After code changes:
